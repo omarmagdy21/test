@@ -23,14 +23,13 @@ class FastAPILLM(LLM, BaseModel):
     def _stream(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> Iterator[GenerationChunk]:
         """Stream tokens from the FastAPI endpoint."""
         try:
-            with requests.post(self.endpoint_url, params={"prompt": prompt}, stream=True, timeout=60) as response:
+            with requests.post(self.endpoint_url, json={"prompt": prompt}, stream=True, timeout=60) as response:
                 response.raise_for_status()
                 buffer = ""
                 for line in response.iter_lines():
                     if line:
-                        decoded_line = line.decode('utf-8')
                         try:
-                            data = json.loads(decoded_line)
+                            data = json.loads(line.decode('utf-8'))
                             generated_text = data.get("response", "")
                             yield GenerationChunk(text=generated_text)
                         except json.JSONDecodeError:
