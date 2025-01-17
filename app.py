@@ -25,10 +25,16 @@ class FastAPILLM(LLM, BaseModel):
         try:
             with requests.post(self.endpoint_url, params={"prompt": prompt}, stream=True, timeout=60) as response:
                 response.raise_for_status()
+                buffer = ""
                 for line in response.iter_lines():
                     if line:
-                        token = line.decode('utf-8')
-                        yield GenerationChunk(text=token)
+                        decoded_line = line.decode('utf-8')
+                        try:
+                            data = json.loads(decoded_line)
+                            generated_text = data.get("response", "")
+                            yield GenerationChunk(text=generated_text)
+                        except json.JSONDecodeError:
+                            continue  # Skip malformed lines
         except requests.exceptions.RequestException as e:
             yield GenerationChunk(text=f"Error: {str(e)}")
 
