@@ -8,32 +8,39 @@ import requests
 import json
 
 class FastAPILLM(LLM, BaseModel):
-    """Custom LLM that uses a FastAPI endpoint running Ollama."""
-    
     endpoint_url: str = Field(description="URL of the FastAPI endpoint")
     model_name: str = Field(default="llama3.1:8b", description="Name of the model")
     
     class Config:
         arbitrary_types_allowed = True
 
-    def _call(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> str:
-        """Fallback non-streaming call."""
-        return self._stream(prompt, stop, run_manager, **kwargs).__next__().text
+    def _call(
+        self, prompt: str, stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any
+    ) -> str:
+        return "".join(chunk.text for chunk in self._stream(prompt, stop, run_manager, **kwargs))
 
-    def _stream(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> Iterator[GenerationChunk]:
-        """Stream tokens from the FastAPI endpoint."""
+    def _stream(
+        self, prompt: str, stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any
+    ) -> Iterator[GenerationChunk]:
         try:
-            with requests.post(self.endpoint_url, json={"prompt": prompt}, stream=True, timeout=60) as response:
+            with requests.post(
+                self.endpoint_url,
+                json={"prompt": prompt},
+                stream=True,
+                timeout=60
+            ) as response:
                 response.raise_for_status()
-                buffer = ""
                 for line in response.iter_lines():
                     if line:
                         try:
                             data = json.loads(line.decode('utf-8'))
                             generated_text = data.get("response", "")
-                            yield GenerationChunk(text=generated_text)
+                            if generated_text:  # Only yield if there's actual content
+                                yield GenerationChunk(text=generated_text)
                         except json.JSONDecodeError:
-                            continue  # Skip malformed lines
+                            continue
         except requests.exceptions.RequestException as e:
             yield GenerationChunk(text=f"Error: {str(e)}")
 
@@ -59,12 +66,15 @@ if st.button("Generate"):
     if prompt:
         output_placeholder = st.empty()
         try:
-            response_stream = llm._stream(prompt)
             full_text = ""
-            for chunk in response_stream:
-                full_text += chunk.text
-                output_placeholder.markdown(f"**Generated Text:**\n\n{full_text}")
+            # Create a spinner while generating
+            with st.spinner("Generating..."):
+                for chunk in llm._stream(prompt):
+                    if chunk.text:
+                        full_text += chunk.text
+                        # Update the output in real-time
+                        output_placeholder.markdown(f"**Generated Text:**\n\n{full_text}")
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error: {str(e)}")
     else:
         st.warning("Please enter a prompt to continue.")
