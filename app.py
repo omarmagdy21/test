@@ -17,28 +17,20 @@ class FastAPILLM(LLM, BaseModel):
         arbitrary_types_allowed = True
 
     def _call(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> str:
-        """Make a call to the FastAPI endpoint."""
-        try:
-            response = requests.post(self.endpoint_url, params={"prompt": prompt}, timeout=60)
-            response.raise_for_status()
-            response_data = response.json()
-            if isinstance(response_data, dict) and "response" in response_data:
-                generated_text = response_data["response"]
-            else:
-                generated_text = response_data
-            if stop:
-                for stop_sequence in stop:
-                    if stop_sequence in generated_text:
-                        generated_text = generated_text[:generated_text.index(stop_sequence)]
-            return generated_text
-        except requests.exceptions.RequestException as e:
-            raise ValueError(f"Error calling FastAPI endpoint: {str(e)}")
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error parsing response from FastAPI endpoint: {str(e)}")
+        """Fallback non-streaming call."""
+        return self._stream(prompt, stop, run_manager, **kwargs).__next__().text
 
     def _stream(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> Iterator[GenerationChunk]:
-        response = self._call(prompt, stop=stop, run_manager=run_manager, **kwargs)
-        yield GenerationChunk(text=response)
+        """Stream tokens from the FastAPI endpoint."""
+        try:
+            with requests.post(self.endpoint_url, params={"prompt": prompt}, stream=True, timeout=60) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if line:
+                        token = line.decode('utf-8')
+                        yield GenerationChunk(text=token)
+        except requests.exceptions.RequestException as e:
+            yield GenerationChunk(text=f"Error: {str(e)}")
 
     @property
     def _identifying_params(self) -> Dict[str, Any]:
@@ -52,7 +44,7 @@ class FastAPILLM(LLM, BaseModel):
 llm = FastAPILLM(endpoint_url="http://34.57.134.25:8000/generate", model_name="llama3.1:8b")
 
 # Streamlit App
-st.title("FastAPILLM Interactive Demo")
+st.title("FastAPILLM Streaming Demo")
 
 # Input for user prompt
 prompt = st.text_input("Enter your prompt:")
@@ -60,11 +52,14 @@ prompt = st.text_input("Enter your prompt:")
 # Button to invoke LLM
 if st.button("Generate"):
     if prompt:
+        output_placeholder = st.empty()
         try:
-            response = llm.invoke(prompt)
-            st.success("Generated Text:")
-            st.write(response)
-        except ValueError as e:
+            response_stream = llm._stream(prompt)
+            full_text = ""
+            for chunk in response_stream:
+                full_text += chunk.text
+                output_placeholder.markdown(f"**Generated Text:**\n\n{full_text}")
+        except Exception as e:
             st.error(f"Error: {e}")
     else:
         st.warning("Please enter a prompt to continue.")
